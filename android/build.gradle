@@ -160,7 +160,7 @@ ext {
     mavenPassword = System.env.MVN_PASSWORD ?: ""
 
     // Libre build
-    libreBuild = (System.env.LIBRE_BUILD ?: "false").toBoolean()
+    libreBuild = true
 
     googleServicesEnabled = project.file('app/google-services.json').exists() && !libreBuild
 }
