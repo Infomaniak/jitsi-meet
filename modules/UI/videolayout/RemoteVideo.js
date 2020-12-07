@@ -12,10 +12,13 @@ import { i18next } from '../../../react/features/base/i18n';
 import {
     JitsiParticipantConnectionStatus
 } from '../../../react/features/base/lib-jitsi-meet';
+import { MEDIA_TYPE } from '../../../react/features/base/media';
 import {
+    getParticipantById,
     getPinnedParticipant,
     pinParticipant
 } from '../../../react/features/base/participants';
+import { isRemoteTrackMuted } from '../../../react/features/base/tracks';
 import { PresenceLabel } from '../../../react/features/presence-status';
 import {
     REMOTE_CONTROL_MENU_STATES,
@@ -86,7 +89,6 @@ export default class RemoteVideo extends SmallVideo {
         this.bindHoverHandler();
         this.flipX = false;
         this.isLocal = false;
-        this.popupMenuIsHovered = false;
         this._isRemoteControlSessionActive = false;
 
         /**
@@ -97,17 +99,6 @@ export default class RemoteVideo extends SmallVideo {
          * @type {boolean}
          */
         this._canPlayEventReceived = false;
-
-        /**
-         * The flag is set to <tt>true</tt> if remote participant's video gets muted
-         * during his media connection disruption. This is to prevent black video
-         * being render on the thumbnail, because even though once the video has
-         * been played the image usually remains on the video element it seems that
-         * after longer period of the video element being hidden this image can be
-         * lost.
-         * @type {boolean}
-         */
-        this.mutedWhileDisconnected = false;
 
         // Bind event handlers so they are only bound once for every instance.
         // TODO The event handlers should be turned into actions so changes can be
@@ -138,27 +129,12 @@ export default class RemoteVideo extends SmallVideo {
     }
 
     /**
-     * Checks whether current video is considered hovered. Currently it is hovered
-     * if the mouse is over the video, or if the connection indicator or the popup
-     * menu is shown(hovered).
-     * @private
-     * NOTE: extends SmallVideo's method
-     */
-    _isHovered() {
-        return super._isHovered() || this.popupMenuIsHovered;
-    }
-
-    /**
      * Generates the popup menu content.
      *
      * @returns {Element|*} the constructed element, containing popup menu items
      * @private
      */
     _generatePopupContent() {
-        if (interfaceConfig.filmStripOnly) {
-            return;
-        }
-
         const remoteVideoMenuContainer
             = this.container.querySelector('.remotevideomenu');
 
@@ -207,7 +183,6 @@ export default class RemoteVideo extends SmallVideo {
                     <AtlasKitThemeProvider mode = 'dark'>
                         <RemoteVideoMenuTriggerButton
                             initialVolumeValue = { initialVolumeValue }
-                            isAudioMuted = { this.isAudioMuted }
                             menuPosition = { remoteMenuPosition }
                             onMenuDisplay
                                 = {this._onRemoteVideoMenuDisplay.bind(this)}
@@ -311,41 +286,9 @@ export default class RemoteVideo extends SmallVideo {
 
     /**
      * Updates the remote video menu.
-     *
-     * @param isMuted the new muted state to update to
      */
-    updateRemoteVideoMenu(isMuted) {
-        if (typeof isMuted !== 'undefined') {
-            this.isAudioMuted = isMuted;
-        }
+    updateRemoteVideoMenu() {
         this._generatePopupContent();
-    }
-
-    /**
-     * @inheritDoc
-     * @override
-     */
-    setVideoMutedView(isMuted) {
-        super.setVideoMutedView(isMuted);
-
-        // Update 'mutedWhileDisconnected' flag
-        this._figureOutMutedWhileDisconnected();
-    }
-
-    /**
-     * Figures out the value of {@link #mutedWhileDisconnected} flag by taking into
-     * account remote participant's network connectivity and video muted status.
-     *
-     * @private
-     */
-    _figureOutMutedWhileDisconnected() {
-        const isActive = this.isConnectionActive();
-
-        if (!isActive && this.isVideoMuted) {
-            this.mutedWhileDisconnected = true;
-        } else if (isActive && !this.isVideoMuted) {
-            this.mutedWhileDisconnected = false;
-        }
     }
 
     /**
@@ -373,21 +316,9 @@ export default class RemoteVideo extends SmallVideo {
 
         if (stream === this.videoStream) {
             this.videoStream = null;
-            this.videoType = undefined;
         }
 
         this.updateView();
-    }
-
-    /**
-     * Checks whether the remote user associated with this <tt>RemoteVideo</tt>
-     * has connectivity issues.
-     *
-     * @return {boolean} <tt>true</tt> if the user's connection is fine or
-     * <tt>false</tt> otherwise.
-     */
-    isConnectionActive() {
-        return this.user.getConnectionStatus() === JitsiParticipantConnectionStatus.ACTIVE;
     }
 
     /**
@@ -401,12 +332,13 @@ export default class RemoteVideo extends SmallVideo {
      * @override
      */
     isVideoPlayable() {
-        const connectionState = APP.conference.getParticipantConnectionStatus(this.id);
+        const participant = getParticipantById(APP.store.getState(), this.id);
+        const { connectionStatus, mutedWhileDisconnected } = participant || {};
 
         return super.isVideoPlayable()
             && this._canPlayEventReceived
-            && (connectionState === JitsiParticipantConnectionStatus.ACTIVE
-                || (connectionState === JitsiParticipantConnectionStatus.INTERRUPTED && !this.mutedWhileDisconnected));
+            && (connectionStatus === JitsiParticipantConnectionStatus.ACTIVE
+                || (connectionStatus === JitsiParticipantConnectionStatus.INTERRUPTED && !mutedWhileDisconnected));
     }
 
     /**
@@ -414,25 +346,7 @@ export default class RemoteVideo extends SmallVideo {
      */
     updateView() {
         this.$container.toggleClass('audio-only', APP.conference.isAudioOnly());
-        this.updateConnectionStatusIndicator();
-
-        // This must be called after 'updateConnectionStatusIndicator' because it
-        // affects the display mode by modifying 'mutedWhileDisconnected' flag
         super.updateView();
-    }
-
-    /**
-     * Updates the UI to reflect user's connectivity status.
-     */
-    updateConnectionStatusIndicator() {
-        const connectionStatus = this.user.getConnectionStatus();
-
-        logger.debug(`${this.id} thumbnail connection status: ${connectionStatus}`);
-
-        // FIXME rename 'mutedWhileDisconnected' to 'mutedWhileNotRendering'
-        // Update 'mutedWhileDisconnected' flag
-        this._figureOutMutedWhileDisconnected();
-        this.updateConnectionStatus(connectionStatus);
     }
 
     /**
@@ -484,7 +398,6 @@ export default class RemoteVideo extends SmallVideo {
 
         if (isVideo) {
             this.videoStream = stream;
-            this.videoType = stream.videoType;
         } else {
             this.audioStream = stream;
         }

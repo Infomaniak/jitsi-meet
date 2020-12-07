@@ -514,7 +514,7 @@ export function urlObjectToString(o: Object): ?string {
     // pathname
 
     // Web's ExternalAPI roomName
-    const room = o.roomName || o.room;
+    const room = _fixRoom(o.roomName || o.room);
 
     if (room
             && (url.pathname.endsWith('/')
@@ -546,7 +546,7 @@ export function urlObjectToString(o: Object): ?string {
 
     let { hash } = url;
 
-    for (const urlPrefix of [ 'config', 'interfaceConfig', 'devices', 'userInfo' ]) {
+    for (const urlPrefix of [ 'config', 'interfaceConfig', 'devices', 'userInfo', 'appData' ]) {
         const urlParamsArray
             = _objectToURLParamsArray(
                 o[`${urlPrefix}Overwrite`]
