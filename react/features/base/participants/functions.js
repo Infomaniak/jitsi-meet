@@ -16,7 +16,6 @@ import {
 } from './constants';
 import { preloadImage } from './preloadImage';
 
-declare var config: Object;
 declare var interfaceConfig: Object;
 
 /**
@@ -299,7 +298,7 @@ export function isEveryoneModerator(stateful: Object | Function) {
  * @returns {boolean}
  */
 export function isIconUrl(icon: ?string | ?Object) {
-    return Boolean(icon) && typeof icon === 'object';
+    return Boolean(icon) && (typeof icon === 'object' || typeof icon === 'function');
 }
 
 /**
@@ -361,10 +360,10 @@ export function shouldRenderParticipantVideo(stateful: Object | Function, id: st
     }
 
     /* Last, check if the participant is sharing their screen and they are on stage. */
-    const screenShares = state['features/video-layout'].screenShares || [];
+    const remoteScreenShares = state['features/video-layout'].remoteScreenShares || [];
     const largeVideoParticipantId = state['features/large-video'].participantId;
     const participantIsInLargeVideoWithScreen
-        = participant.id === largeVideoParticipantId && screenShares.includes(participant.id);
+        = participant.id === largeVideoParticipantId && remoteScreenShares.includes(participant.id);
 
     return participantIsInLargeVideoWithScreen;
 }

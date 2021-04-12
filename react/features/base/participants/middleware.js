@@ -1,6 +1,7 @@
 // @flow
 
 import UIEvents from '../../../../service/UI/UIEvents';
+import { toggleE2EE } from '../../e2ee/actions';
 import { NOTIFICATION_TIMEOUT, showNotification } from '../../notifications';
 import { CALLING, INVITED } from '../../presence-status';
 import { APP_WILL_MOUNT, APP_WILL_UNMOUNT } from '../app';
@@ -112,7 +113,7 @@ MiddlewareRegistry.register(store => next => action => {
     case MUTE_REMOTE_PARTICIPANT: {
         const { conference } = store.getState()['features/base/conference'];
 
-        conference.muteParticipant(action.id);
+        conference.muteParticipant(action.id, action.mediaType);
         break;
     }
 
@@ -206,51 +207,53 @@ StateListenerRegistry.register(
     state => state['features/base/conference'].conference,
     (conference, store) => {
         if (conference) {
+            const propertyHandlers = {
+                'e2ee.enabled': (participant, value) => _e2eeUpdated(store, conference, participant.getId(), value),
+                'features_e2ee': (participant, value) =>
+                    store.dispatch(participantUpdated({
+                        conference,
+                        id: participant.getId(),
+                        e2eeSupported: value
+                    })),
+                'features_jigasi': (participant, value) =>
+                    store.dispatch(participantUpdated({
+                        conference,
+                        id: participant.getId(),
+                        isJigasi: value
+                    })),
+                'features_screen-sharing': (participant, value) => // eslint-disable-line no-unused-vars
+                    store.dispatch(participantUpdated({
+                        conference,
+                        id: participant.getId(),
+                        features: { 'screen-sharing': true }
+                    })),
+                'raisedHand': (participant, value) => _raiseHandUpdated(store, conference, participant.getId(), value),
+                'remoteControlSessionStatus': (participant, value) =>
+                    store.dispatch(participantUpdated({
+                        conference,
+                        id: participant.getId(),
+                        remoteControlSessionStatus: value
+                    }))
+            };
+
+            // update properties for the participants that are already in the conference
+            conference.getParticipants().forEach(participant => {
+                Object.keys(propertyHandlers).forEach(propertyName => {
+                    const value = participant.getProperty(propertyName);
+
+                    if (value !== undefined) {
+                        propertyHandlers[propertyName](participant, value);
+                    }
+                });
+            });
+
             // We joined a conference
             conference.on(
                 JitsiConferenceEvents.PARTICIPANT_PROPERTY_CHANGED,
                 (participant, propertyName, oldValue, newValue) => {
-                    switch (propertyName) {
-                    case 'e2eeEnabled':
-                        _e2eeUpdated(store, conference, participant.getId(), newValue);
-                        break;
-                    case 'features_e2ee':
-                        store.dispatch(participantUpdated({
-                            conference,
-                            id: participant.getId(),
-                            e2eeSupported: newValue
-                        }));
-                        break;
-                    case 'features_jigasi':
-                        store.dispatch(participantUpdated({
-                            conference,
-                            id: participant.getId(),
-                            isJigasi: newValue
-                        }));
-                        break;
-                    case 'features_screen-sharing':
-                        store.dispatch(participantUpdated({
-                            conference,
-                            id: participant.getId(),
-                            features: { 'screen-sharing': true }
-                        }));
-                        break;
-                    case 'raisedHand': {
-                        _raiseHandUpdated(store, conference, participant.getId(), newValue);
-                        break;
+                    if (propertyHandlers.hasOwnProperty(propertyName)) {
+                        propertyHandlers[propertyName](participant, newValue);
                     }
-                    case 'remoteControlSessionStatus':
-                        store.dispatch(participantUpdated({
-                            conference,
-                            id: participant.getId(),
-                            remoteControlSessionStatus: newValue
-                        }));
-                        break;
-                    default:
-
-                        // Ignore for now.
-                    }
-
                 });
         } else {
             const localParticipantId = getLocalParticipant(store.getState).id;
@@ -268,11 +271,15 @@ StateListenerRegistry.register(
  * @param {Function} dispatch - The Redux dispatch function.
  * @param {Object} conference - The conference for which we got an update.
  * @param {string} participantId - The ID of the participant from which we got an update.
- * @param {boolean} newValue - The new value of the E2EE enabled     status.
+ * @param {boolean} newValue - The new value of the E2EE enabled status.
  * @returns {void}
  */
 function _e2eeUpdated({ dispatch }, conference, participantId, newValue) {
     const e2eeEnabled = newValue === 'true';
+
+    if (e2eeEnabled) {
+        dispatch(toggleE2EE(e2eeEnabled));
+    }
 
     dispatch(participantUpdated({
         conference,
@@ -337,7 +344,12 @@ function _localParticipantLeft({ dispatch }, next, action) {
  */
 function _maybePlaySounds({ getState, dispatch }, action) {
     const state = getState();
-    const { startAudioMuted } = state['features/base/config'];
+    const { startAudioMuted, disableJoinLeaveSounds } = state['features/base/config'];
+
+    // If we have join/leave sounds disabled, don't play anything.
+    if (disableJoinLeaveSounds) {
+        return;
+    }
 
     // We're not playing sounds for local participant
     // nor when the user is joining past the "startAudioMuted" limit.
@@ -376,7 +388,7 @@ function _maybePlaySounds({ getState, dispatch }, action) {
  */
 function _participantJoinedOrUpdated(store, next, action) {
     const { dispatch, getState } = store;
-    const { participant: { avatarURL, e2eeEnabled, email, id, local, name, raisedHand } } = action;
+    const { participant: { avatarURL, email, id, local, name, raisedHand } } = action;
 
     // Send an external update of the local participant's raised hand state
     // if a new raised hand state is defined in the action.
@@ -388,16 +400,6 @@ function _participantJoinedOrUpdated(store, next, action) {
             if (conference && raisedHand !== getLocalParticipant(getState()).raisedHand) {
                 conference.setLocalParticipantProperty('raisedHand', raisedHand);
             }
-        }
-    }
-
-    // Send an external update of the local participant's E2EE enabled state
-    // if a new state is defined in the action.
-    if (typeof e2eeEnabled !== 'undefined') {
-        if (local) {
-            const { conference } = getState()['features/base/conference'];
-
-            conference && conference.setLocalParticipantProperty('e2eeEnabled', e2eeEnabled);
         }
     }
 
@@ -445,6 +447,10 @@ function _raiseHandUpdated({ dispatch, getState }, conference, participantId, ne
         id: participantId,
         raisedHand
     }));
+
+    if (typeof APP !== 'undefined') {
+        APP.API.notifyRaiseHandUpdated(participantId, raisedHand);
+    }
 
     if (raisedHand) {
         dispatch(showNotification({
