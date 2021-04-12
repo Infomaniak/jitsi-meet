@@ -70,7 +70,7 @@ class ScreenSharingButton extends AbstractButton<Props, *> {
 function _mapStateToProps(state): Object {
     return {
         _screensharing: isLocalVideoTrackDesktop(state),
-        visible: false // kMeet
+        visible: Platform.OS === 'android'
     };
 }
 
